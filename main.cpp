@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
+#include <numeric>
 #include <vector>
 #include "thread_pool.hpp"
 
@@ -27,6 +28,19 @@ int main()
       completed += value;
     }
     std::cout << "Completed: " << completed << "\n";
+    pool.pause();
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+      pool.submit(
+          [&values, i]()
+          {
+            ++values[i];
+          });
+    }
+    std::cout << "Before resume: " << std::accumulate(values.begin(), values.end(), 0) << "\n";
+    pool.resume();
+    pool.wait();
+    std::cout << "After resume: " << std::accumulate(values.begin(), values.end(), 0) << "\n";
   }
   catch (const std::exception &error)
   {

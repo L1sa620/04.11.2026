@@ -71,6 +71,21 @@ void matveev::ThreadPool::wait()
   }
 }
 
+void matveev::ThreadPool::pause()
+{
+  const std::lock_guard< std::mutex > lock(mutex_);
+  paused_ = true;
+}
+
+void matveev::ThreadPool::resume()
+{
+  {
+    const std::lock_guard< std::mutex > lock(mutex_);
+    paused_ = false;
+  }
+  ready_.notify_all();
+}
+
 void matveev::ThreadPool::execute()
 {
   while (true)
@@ -81,7 +96,7 @@ void matveev::ThreadPool::execute()
       ready_.wait(lock,
           [this]()
           {
-            return stopping_ || !tasks_.empty();
+            return stopping_ || (!paused_ && !tasks_.empty());
           });
       if (tasks_.empty())
       {

@@ -21,6 +21,8 @@ namespace matveev
     ~ThreadPool();
     void submit(Task task);
     void wait();
+    void pause();
+    void resume();
 
   private:
     std::queue< Task > tasks_ = {};
@@ -30,6 +32,7 @@ namespace matveev
     std::vector< std::thread > workers_ = {};
     std::size_t active_ = 0;
     bool stopping_ = false;
+    bool paused_ = false;
     std::exception_ptr first_error_ = nullptr;
 
     void execute();
