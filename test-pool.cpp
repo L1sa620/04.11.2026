@@ -19,6 +19,10 @@ namespace matveev
     void testInvalidInput();
     void testTaskFailure();
     void testWorkerWait();
+    void testPausedQueue();
+    void testActiveOnPause();
+    void testPausedDestruction();
+    void testPauseCycles();
   }
 }
 
@@ -179,6 +183,111 @@ void matveev::tests::testWorkerWait()
   require(rejected);
 }
 
+void matveev::tests::testPausedQueue()
+{
+  std::promise< void > entered = {};
+  std::future< void > started = entered.get_future();
+  ThreadPool pool(1);
+  pool.pause();
+  pool.pause();
+  pool.submit(
+      [&entered]()
+      {
+        entered.set_value();
+      });
+  std::future< void > waiting = std::async(std::launch::async,
+      [&pool]()
+      {
+        pool.wait();
+      });
+  constexpr int check_ms = 30;
+  const bool blocked = started.wait_for(std::chrono::milliseconds(check_ms)) == std::future_status::timeout;
+  const bool waiting_blocked = waiting.wait_for(std::chrono::milliseconds(check_ms)) == std::future_status::timeout;
+  pool.resume();
+  pool.resume();
+  waiting.get();
+  started.get();
+  require(blocked && waiting_blocked);
+}
+
+void matveev::tests::testActiveOnPause()
+{
+  std::promise< void > entered = {};
+  std::future< void > started = entered.get_future();
+  std::promise< void > release = {};
+  const std::shared_future< void > signal = release.get_future().share();
+  std::promise< void > active_finished = {};
+  std::future< void > finished = active_finished.get_future();
+  std::promise< void > queued_started = {};
+  std::future< void > queued = queued_started.get_future();
+  ThreadPool pool(1);
+  pool.submit(
+      [&entered, &active_finished, signal]()
+      {
+        entered.set_value();
+        signal.wait();
+        active_finished.set_value();
+      });
+  started.get();
+  pool.submit(
+      [&queued_started]()
+      {
+        queued_started.set_value();
+      });
+  pool.pause();
+  release.set_value();
+  finished.get();
+  constexpr int check_ms = 30;
+  const bool blocked = queued.wait_for(std::chrono::milliseconds(check_ms)) == std::future_status::timeout;
+  pool.resume();
+  pool.wait();
+  queued.get();
+  require(blocked);
+}
+
+void matveev::tests::testPausedDestruction()
+{
+  constexpr unsigned int task_count = 50;
+  std::atomic< unsigned int > completed{0};
+  {
+    ThreadPool pool(1);
+    pool.pause();
+    for (unsigned int i = 0; i < task_count; ++i)
+    {
+      pool.submit(
+          [&completed]()
+          {
+            ++completed;
+          });
+    }
+  }
+  require(completed.load() == task_count);
+}
+
+void matveev::tests::testPauseCycles()
+{
+  constexpr unsigned int thread_count = 4;
+  constexpr unsigned int cycle_count = 10;
+  constexpr unsigned int batch_size = 25;
+  std::atomic< unsigned int > completed{0};
+  ThreadPool pool(thread_count);
+  for (unsigned int cycle = 0; cycle < cycle_count; ++cycle)
+  {
+    pool.pause();
+    for (unsigned int i = 0; i < batch_size; ++i)
+    {
+      pool.submit(
+          [&completed]()
+          {
+            ++completed;
+          });
+    }
+    pool.resume();
+    pool.wait();
+    require(completed.load() == (cycle + 1) * batch_size);
+  }
+}
+
 int main()
 {
   try
@@ -189,7 +298,11 @@ int main()
     matveev::tests::testInvalidInput();
     matveev::tests::testTaskFailure();
     matveev::tests::testWorkerWait();
-    std::cout << "Tests passed: 6\n";
+    matveev::tests::testPausedQueue();
+    matveev::tests::testActiveOnPause();
+    matveev::tests::testPausedDestruction();
+    matveev::tests::testPauseCycles();
+    std::cout << "Tests passed: 10\n";
   }
   catch (const std::exception &error)
   {
