@@ -5,42 +5,61 @@
 #include <vector>
 #include "thread_pool.hpp"
 
+namespace matveev
+{
+  static unsigned int countPrimesBelow(unsigned int limit);
+}
+
+unsigned int matveev::countPrimesBelow(const unsigned int limit)
+{
+  constexpr unsigned int first_prime = 2;
+  unsigned int count = 0;
+  for (unsigned int number = first_prime; number < limit; ++number)
+  {
+    bool prime = true;
+    for (unsigned int divisor = first_prime; divisor <= number / divisor; ++divisor)
+    {
+      if ((number % divisor) == 0)
+      {
+        prime = false;
+        break;
+      }
+    }
+    if (prime)
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
 int main()
 {
   try
   {
     constexpr unsigned int thread_count = 2;
-    constexpr std::size_t task_count = 8;
-    std::vector< int > values(task_count, 0);
-    matveev::ThreadPool pool(thread_count);
-    for (std::size_t i = 0; i < values.size(); ++i)
-    {
-      pool.submit(
-          [&values, i]()
-          {
-            values[i] = 1;
-          });
-    }
-    pool.wait();
-    std::size_t completed = 0;
-    for (const int value : values)
-    {
-      completed += value;
-    }
-    std::cout << "Completed: " << completed << "\n";
+    constexpr std::size_t batch_size = 4;
+    constexpr unsigned int heavy = 100000;
+    constexpr unsigned int light = 100;
+    const std::vector< unsigned int > limits = {heavy, heavy, heavy, heavy, light, light, light, light, 0};
+    std::vector< unsigned int > counts(limits.size(), 0);
+    matveev::ThreadPool pool(thread_count, batch_size);
     pool.pause();
-    for (std::size_t i = 0; i < values.size(); ++i)
+    for (std::size_t i = 0; i < limits.size(); ++i)
     {
       pool.submit(
-          [&values, i]()
+          [&limits, &counts, i]()
           {
-            ++values[i];
+            counts[i] = matveev::countPrimesBelow(limits[i]);
           });
     }
-    std::cout << "Before resume: " << std::accumulate(values.begin(), values.end(), 0) << "\n";
     pool.resume();
     pool.wait();
-    std::cout << "After resume: " << std::accumulate(values.begin(), values.end(), 0) << "\n";
+    for (std::size_t i = 0; i < limits.size(); ++i)
+    {
+      std::cout << "Primes below " << limits[i] << ": " << counts[i] << "\n";
+    }
+    std::cout << "Total: " << std::accumulate(counts.begin(), counts.end(), 0U) << "\n";
   }
   catch (const std::exception &error)
   {

@@ -25,6 +25,7 @@ namespace matveev
     void testPauseCycles();
     void testNestedSubmission();
     void testBatchSizes();
+    void testConcurrentProducers();
   }
 }
 
@@ -349,6 +350,41 @@ void matveev::tests::testBatchSizes()
   }
 }
 
+void matveev::tests::testConcurrentProducers()
+{
+  constexpr std::size_t job_count = 17;
+  constexpr unsigned int thread_count = 3;
+  constexpr unsigned int heavy = 25;
+  std::atomic< unsigned int > visits[job_count] = {};
+  for (auto &visit : visits)
+  {
+    visit.store(0);
+  }
+  ThreadPool pool(thread_count);
+  const auto produce = [&pool, &visits](const unsigned int weight)
+  {
+    for (std::size_t i = 0; i < job_count; ++i)
+    {
+      pool.submit(
+          [&visits, i, weight]()
+          {
+            for (unsigned int unit = 0; unit < weight; ++unit)
+            {
+              ++visits[i];
+            }
+          });
+    }
+  };
+  std::future< void > other = std::async(std::launch::async, produce, heavy);
+  produce(1);
+  other.get();
+  pool.wait();
+  for (const auto &visit : visits)
+  {
+    require(visit.load() == heavy + 1);
+  }
+}
+
 int main()
 {
   try
@@ -365,7 +401,8 @@ int main()
     matveev::tests::testPauseCycles();
     matveev::tests::testNestedSubmission();
     matveev::tests::testBatchSizes();
-    std::cout << "Tests passed: 12\n";
+    matveev::tests::testConcurrentProducers();
+    std::cout << "Tests passed: 13\n";
   }
   catch (const std::exception &error)
   {
