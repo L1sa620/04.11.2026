@@ -1,22 +1,31 @@
 #include "thread_pool.hpp"
+#include <cstddef>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <utility>
 
-matveev::ThreadPool::ThreadPool(const unsigned int count)
+constexpr std::size_t matveev::ThreadPool::default_batch_size;
+
+matveev::ThreadPool::ThreadPool(const unsigned int count, const std::size_t batch_size):
+  batch_size_(batch_size)
 {
   if (count == 0)
   {
     throw std::invalid_argument("Thread count must be positive");
   }
+  if (batch_size == 0)
+  {
+    throw std::invalid_argument("Batch size must be positive");
+  }
+  local_queues_.resize(count);
   workers_.reserve(count);
   try
   {
     for (unsigned int i = 0; i < count; ++i)
     {
-      workers_.emplace_back(&ThreadPool::execute, this);
+      workers_.emplace_back(&ThreadPool::execute, this, i);
     }
   }
   catch (...)
@@ -43,7 +52,7 @@ void matveev::ThreadPool::submit(Task task)
     {
       throw std::logic_error("Thread pool is stopping");
     }
-    tasks_.push(std::move(task));
+    tasks_.push_back(std::move(task));
     ++unfinished_;
   }
   ready_.notify_one();
@@ -87,24 +96,49 @@ void matveev::ThreadPool::resume()
   ready_.notify_all();
 }
 
-void matveev::ThreadPool::execute()
+matveev::ThreadPool::Task matveev::ThreadPool::takeTask(const std::size_t index)
+{
+  Queue &local = local_queues_[index];
+  if (local.empty())
+  {
+    if (tasks_.empty())
+    {
+      return {};
+    }
+    auto last = tasks_.begin();
+    for (std::size_t i = 0; (i < batch_size_) && (last != tasks_.end()); ++i)
+    {
+      ++last;
+    }
+    local.splice(local.end(), tasks_, tasks_.begin(), last);
+  }
+  Task task = std::move(local.front());
+  local.pop_front();
+  return task;
+}
+
+void matveev::ThreadPool::execute(const std::size_t index)
 {
   while (true)
   {
     Task task = {};
     {
       std::unique_lock< std::mutex > lock(mutex_);
-      ready_.wait(lock,
-          [this]()
-          {
-            return stopping_ || (!paused_ && !tasks_.empty());
-          });
-      if (tasks_.empty())
+      while (!task)
       {
-        return;
+        if (stopping_ || !paused_)
+        {
+          task = takeTask(index);
+        }
+        if (!task)
+        {
+          if (stopping_)
+          {
+            return;
+          }
+          ready_.wait(lock);
+        }
       }
-      task = std::move(tasks_.front());
-      tasks_.pop();
     }
     run(std::move(task));
   }

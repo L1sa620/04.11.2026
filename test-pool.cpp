@@ -24,6 +24,7 @@ namespace matveev
     void testPausedDestruction();
     void testPauseCycles();
     void testNestedSubmission();
+    void testBatchSizes();
   }
 }
 
@@ -311,6 +312,43 @@ void matveev::tests::testNestedSubmission()
   require(children.load() == child_count);
 }
 
+void matveev::tests::testBatchSizes()
+{
+  bool rejected = false;
+  try
+  {
+    const ThreadPool invalid(1, 0);
+  }
+  catch (const std::invalid_argument &)
+  {
+    rejected = true;
+  }
+  require(rejected);
+  constexpr std::size_t sizes[] = {1, 4, 20};
+  constexpr std::size_t count = 9;
+  for (const std::size_t size : sizes)
+  {
+    std::vector< std::size_t > order = {};
+    ThreadPool pool(1, size);
+    pool.pause();
+    for (std::size_t i = 0; i < count; ++i)
+    {
+      pool.submit(
+          [&order, i]()
+          {
+            order.push_back(i);
+          });
+    }
+    pool.resume();
+    pool.wait();
+    require(order.size() == count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+      require(order[i] == i);
+    }
+  }
+}
+
 int main()
 {
   try
@@ -326,7 +364,8 @@ int main()
     matveev::tests::testPausedDestruction();
     matveev::tests::testPauseCycles();
     matveev::tests::testNestedSubmission();
-    std::cout << "Tests passed: 11\n";
+    matveev::tests::testBatchSizes();
+    std::cout << "Tests passed: 12\n";
   }
   catch (const std::exception &error)
   {
