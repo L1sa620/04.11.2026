@@ -26,6 +26,7 @@ matveev::ThreadPool::ThreadPool(const unsigned int count, const std::size_t batc
     for (unsigned int i = 0; i < count; ++i)
     {
       workers_.emplace_back(&ThreadPool::execute, this, i);
+      local_queues_[i].owner = workers_.back().get_id();
     }
   }
   catch (...)
@@ -60,9 +61,9 @@ void matveev::ThreadPool::submit(Task task)
 
 void matveev::ThreadPool::wait()
 {
-  for (const std::thread &worker : workers_)
+  for (const WorkerQueue &worker : local_queues_)
   {
-    if (worker.get_id() == std::this_thread::get_id())
+    if (worker.owner == std::this_thread::get_id())
     {
       throw std::logic_error("A worker cannot wait for its own pool");
     }
@@ -96,29 +97,51 @@ void matveev::ThreadPool::resume()
   ready_.notify_all();
 }
 
+matveev::ThreadPool::Task matveev::ThreadPool::popFront(Queue &queue)
+{
+  Task task = {};
+  task.swap(queue.front());
+  queue.pop_front();
+  return task;
+}
+
+matveev::ThreadPool::Task matveev::ThreadPool::takeLocal(const std::size_t index)
+{
+  WorkerQueue &local = local_queues_[index];
+  const std::lock_guard< std::mutex > lock(local.mutex);
+  if (paused_.load() || local.tasks.empty())
+  {
+    return {};
+  }
+  return popFront(local.tasks);
+}
+
 matveev::ThreadPool::Task matveev::ThreadPool::takeTask(const std::size_t index)
 {
-  Queue &local = local_queues_[index];
-  if (local.empty())
+  WorkerQueue &worker = local_queues_[index];
   {
-    if (tasks_.empty())
+    const std::lock_guard< std::mutex > lock(worker.mutex);
+    Queue &local = worker.tasks;
+    if (!local.empty())
     {
-      return stealTask(index);
+      return popFront(local);
     }
-    auto last = tasks_.begin();
-    for (std::size_t i = 0; (i < batch_size_) && (last != tasks_.end()); ++i)
+    if (!tasks_.empty())
     {
-      ++last;
-    }
-    local.splice(local.end(), tasks_, tasks_.begin(), last);
-    if (local.size() > 1)
-    {
-      ready_.notify_all();
+      auto last = tasks_.begin();
+      for (std::size_t i = 0; (i < batch_size_) && (last != tasks_.end()); ++i)
+      {
+        ++last;
+      }
+      local.splice(local.end(), tasks_, tasks_.begin(), last);
+      if (local.size() > 1)
+      {
+        ready_.notify_all();
+      }
+      return popFront(local);
     }
   }
-  Task task = std::move(local.front());
-  local.pop_front();
-  return task;
+  return stealTask(index);
 }
 
 matveev::ThreadPool::Task matveev::ThreadPool::stealTask(const std::size_t index)
@@ -126,10 +149,13 @@ matveev::ThreadPool::Task matveev::ThreadPool::stealTask(const std::size_t index
   const std::size_t count = local_queues_.size();
   for (std::size_t victim = (index + 1) % count; victim != index; victim = (victim + 1) % count)
   {
-    Queue &queue = local_queues_[victim];
+    WorkerQueue &peer = local_queues_[victim];
+    const std::lock_guard< std::mutex > lock(peer.mutex);
+    Queue &queue = peer.tasks;
     if (!queue.empty())
     {
-      Task task = std::move(queue.back());
+      Task task = {};
+      task.swap(queue.back());
       queue.pop_back();
       return task;
     }
@@ -141,7 +167,8 @@ void matveev::ThreadPool::execute(const std::size_t index)
 {
   while (true)
   {
-    Task task = {};
+    Task task = takeLocal(index);
+    if (!task)
     {
       std::unique_lock< std::mutex > lock(mutex_);
       while (!task)

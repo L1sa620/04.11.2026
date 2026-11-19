@@ -30,18 +30,27 @@ namespace matveev
   private:
     using Queue = std::list< Task >;
 
+    struct WorkerQueue final
+    {
+      std::mutex mutex = {};
+      Queue tasks = {};
+      std::thread::id owner = {};
+    };
+
     const std::size_t batch_size_;
     Queue tasks_ = {};
-    std::deque< Queue > local_queues_ = {};
+    std::deque< WorkerQueue > local_queues_ = {};
     std::mutex mutex_ = {};
     std::condition_variable ready_ = {};
     std::condition_variable finished_ = {};
     std::vector< std::thread > workers_ = {};
     std::atomic< std::size_t > unfinished_{0};
     bool stopping_ = false;
-    bool paused_ = false;
+    std::atomic< bool > paused_{false};
     std::exception_ptr first_error_ = nullptr;
 
+    static Task popFront(Queue &queue);
+    Task takeLocal(std::size_t index);
     Task takeTask(std::size_t index);
     Task stealTask(std::size_t index);
     void execute(std::size_t index);

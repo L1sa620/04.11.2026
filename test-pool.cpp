@@ -30,6 +30,7 @@ namespace matveev
     void testBatchSizes();
     void testConcurrentProducers();
     void testStealFromBlockedOwner();
+    void testWorkerWaitDuringDrain();
   }
 }
 
@@ -228,6 +229,7 @@ void matveev::tests::testActiveOnPause()
   std::promise< void > queued_started = {};
   std::future< void > queued = queued_started.get_future();
   ThreadPool pool(1);
+  pool.pause();
   pool.submit(
       [&entered, &active_finished, signal]()
       {
@@ -235,12 +237,13 @@ void matveev::tests::testActiveOnPause()
         signal.wait();
         active_finished.set_value();
       });
-  started.get();
   pool.submit(
       [&queued_started]()
       {
         queued_started.set_value();
       });
+  pool.resume();
+  started.get();
   pool.pause();
   release.set_value();
   finished.get();
@@ -438,6 +441,28 @@ void matveev::tests::testStealFromBlockedOwner()
   }
 }
 
+void matveev::tests::testWorkerWaitDuringDrain()
+{
+  bool rejected = false;
+  {
+    ThreadPool pool(1);
+    pool.pause();
+    pool.submit(
+        [&pool, &rejected]()
+        {
+          try
+          {
+            pool.wait();
+          }
+          catch (const std::logic_error &)
+          {
+            rejected = true;
+          }
+        });
+  }
+  require(rejected);
+}
+
 int main()
 {
   try
@@ -456,7 +481,8 @@ int main()
     matveev::tests::testBatchSizes();
     matveev::tests::testConcurrentProducers();
     matveev::tests::testStealFromBlockedOwner();
-    std::cout << "Tests passed: 14\n";
+    matveev::tests::testWorkerWaitDuringDrain();
+    std::cout << "Tests passed: 15\n";
   }
   catch (const std::exception &error)
   {
