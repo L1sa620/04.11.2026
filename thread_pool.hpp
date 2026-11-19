@@ -1,6 +1,7 @@
 #ifndef THREAD_POOL_HPP
 #define THREAD_POOL_HPP
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <exception>
@@ -30,12 +31,13 @@ namespace matveev
     std::condition_variable ready_ = {};
     std::condition_variable finished_ = {};
     std::vector< std::thread > workers_ = {};
-    std::size_t active_ = 0;
+    std::atomic< std::size_t > unfinished_{0};
     bool stopping_ = false;
     bool paused_ = false;
     std::exception_ptr first_error_ = nullptr;
 
     void execute();
+    void run(Task task);
     void finish();
   };
 }

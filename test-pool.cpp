@@ -23,6 +23,7 @@ namespace matveev
     void testActiveOnPause();
     void testPausedDestruction();
     void testPauseCycles();
+    void testNestedSubmission();
   }
 }
 
@@ -288,6 +289,28 @@ void matveev::tests::testPauseCycles()
   }
 }
 
+void matveev::tests::testNestedSubmission()
+{
+  constexpr unsigned int child_count = 40;
+  constexpr unsigned int thread_count = 3;
+  std::atomic< unsigned int > children{0};
+  ThreadPool pool(thread_count);
+  pool.submit(
+      [&pool, &children]()
+      {
+        for (unsigned int i = 0; i < child_count; ++i)
+        {
+          pool.submit(
+              [&children]()
+              {
+                ++children;
+              });
+        }
+      });
+  pool.wait();
+  require(children.load() == child_count);
+}
+
 int main()
 {
   try
@@ -302,7 +325,8 @@ int main()
     matveev::tests::testActiveOnPause();
     matveev::tests::testPausedDestruction();
     matveev::tests::testPauseCycles();
-    std::cout << "Tests passed: 10\n";
+    matveev::tests::testNestedSubmission();
+    std::cout << "Tests passed: 11\n";
   }
   catch (const std::exception &error)
   {

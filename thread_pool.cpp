@@ -44,6 +44,7 @@ void matveev::ThreadPool::submit(Task task)
       throw std::logic_error("Thread pool is stopping");
     }
     tasks_.push(std::move(task));
+    ++unfinished_;
   }
   ready_.notify_one();
 }
@@ -61,7 +62,7 @@ void matveev::ThreadPool::wait()
   finished_.wait(lock,
       [this]()
       {
-        return tasks_.empty() && (active_ == 0);
+        return unfinished_.load() == 0;
       });
   const std::exception_ptr error = first_error_;
   lock.unlock();
@@ -104,30 +105,30 @@ void matveev::ThreadPool::execute()
       }
       task = std::move(tasks_.front());
       tasks_.pop();
-      ++active_;
     }
-    std::exception_ptr error = nullptr;
-    try
+    run(std::move(task));
+  }
+}
+
+void matveev::ThreadPool::run(Task task)
+{
+  try
+  {
+    task();
+  }
+  catch (...)
+  {
+    const std::lock_guard< std::mutex > lock(mutex_);
+    if (!first_error_)
     {
-      task();
+      first_error_ = std::current_exception();
     }
-    catch (...)
-    {
-      error = std::current_exception();
-    }
-    task = nullptr;
-    {
-      const std::lock_guard< std::mutex > lock(mutex_);
-      if (error && !first_error_)
-      {
-        first_error_ = error;
-      }
-      --active_;
-      if (tasks_.empty() && (active_ == 0))
-      {
-        finished_.notify_all();
-      }
-    }
+  }
+  task = nullptr;
+  if (--unfinished_ == 0)
+  {
+    const std::lock_guard< std::mutex > lock(mutex_);
+    finished_.notify_all();
   }
 }
 
