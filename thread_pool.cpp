@@ -103,7 +103,7 @@ matveev::ThreadPool::Task matveev::ThreadPool::takeTask(const std::size_t index)
   {
     if (tasks_.empty())
     {
-      return {};
+      return stealTask(index);
     }
     auto last = tasks_.begin();
     for (std::size_t i = 0; (i < batch_size_) && (last != tasks_.end()); ++i)
@@ -111,10 +111,30 @@ matveev::ThreadPool::Task matveev::ThreadPool::takeTask(const std::size_t index)
       ++last;
     }
     local.splice(local.end(), tasks_, tasks_.begin(), last);
+    if (local.size() > 1)
+    {
+      ready_.notify_all();
+    }
   }
   Task task = std::move(local.front());
   local.pop_front();
   return task;
+}
+
+matveev::ThreadPool::Task matveev::ThreadPool::stealTask(const std::size_t index)
+{
+  const std::size_t count = local_queues_.size();
+  for (std::size_t victim = (index + 1) % count; victim != index; victim = (victim + 1) % count)
+  {
+    Queue &queue = local_queues_[victim];
+    if (!queue.empty())
+    {
+      Task task = std::move(queue.back());
+      queue.pop_back();
+      return task;
+    }
+  }
+  return {};
 }
 
 void matveev::ThreadPool::execute(const std::size_t index)

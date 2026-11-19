@@ -1,10 +1,13 @@
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <exception>
 #include <future>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 #include "thread_pool.hpp"
 
@@ -26,6 +29,7 @@ namespace matveev
     void testNestedSubmission();
     void testBatchSizes();
     void testConcurrentProducers();
+    void testStealFromBlockedOwner();
   }
 }
 
@@ -385,6 +389,55 @@ void matveev::tests::testConcurrentProducers()
   }
 }
 
+void matveev::tests::testStealFromBlockedOwner()
+{
+  constexpr unsigned int thread_count = 2;
+  constexpr std::size_t batch_size = 3;
+  constexpr int timeout_seconds = 3;
+  std::mutex mutex = {};
+  std::condition_variable tail_finished = {};
+  bool tail_ran = false;
+  bool front_saw_tail = false;
+  bool middle_saw_tail = false;
+  std::thread::id front_worker = {};
+  std::thread::id tail_worker = {};
+  ThreadPool pool(thread_count, batch_size);
+  pool.pause();
+  pool.submit(
+      [&]()
+      {
+        front_worker = std::this_thread::get_id();
+        std::unique_lock< std::mutex > lock(mutex);
+        front_saw_tail = tail_finished.wait_for(lock, std::chrono::seconds(timeout_seconds),
+            [&tail_ran]()
+            {
+              return tail_ran;
+            });
+      });
+  pool.submit(
+      [&]()
+      {
+        const std::lock_guard< std::mutex > lock(mutex);
+        middle_saw_tail = tail_ran;
+      });
+  pool.submit(
+      [&]()
+      {
+        tail_worker = std::this_thread::get_id();
+        {
+          const std::lock_guard< std::mutex > lock(mutex);
+          tail_ran = true;
+        }
+        tail_finished.notify_one();
+      });
+  pool.resume();
+  pool.wait();
+  if (!front_saw_tail || !middle_saw_tail || (front_worker == tail_worker))
+  {
+    throw std::runtime_error("An idle worker did not steal the tail of the blocked worker's batch");
+  }
+}
+
 int main()
 {
   try
@@ -402,7 +455,8 @@ int main()
     matveev::tests::testNestedSubmission();
     matveev::tests::testBatchSizes();
     matveev::tests::testConcurrentProducers();
-    std::cout << "Tests passed: 13\n";
+    matveev::tests::testStealFromBlockedOwner();
+    std::cout << "Tests passed: 14\n";
   }
   catch (const std::exception &error)
   {

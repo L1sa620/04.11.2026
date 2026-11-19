@@ -43,6 +43,7 @@ namespace matveev
     std::exception_ptr first_error_ = nullptr;
 
     Task takeTask(std::size_t index);
+    Task stealTask(std::size_t index);
     void execute(std::size_t index);
     void run(Task task);
     void finish();
